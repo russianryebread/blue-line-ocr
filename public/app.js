@@ -71,7 +71,7 @@ $("#extract-btn").addEventListener("click", async () => {
   const interval = setInterval(() => {
     $("#loading-message").textContent = messages[i];
     i = (i + 1) % messages.length;
-  }, 3000);
+  }, 5000);
 
   try {
     const form = new FormData();

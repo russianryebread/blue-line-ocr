@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { EXTRACTION_SYSTEM_PROMPT, EXTRACTION_USER_PROMPT } from "./prompt";
+import { buildStructureUserPrompt, EXTRACTION_SYSTEM_PROMPT, EXTRACTION_USER_PROMPT, STRUCTURE_SYSTEM_PROMPT } from "./prompt";
 import { scorecardJsonSchema, type ExtractionResult, type Scorecard } from "./schema";
 
 export interface Env {
@@ -8,8 +8,10 @@ export interface Env {
   ASSETS: Fetcher;
   readonly LOG_LEVEL: string;
   readonly VISION_MODEL: string;
+  readonly TEXT_MODEL: string;
 }
 const VISION_MODEL_DEFAULT = "@cf/meta/llama-3.2-11b-vision-instruct";
+const TEXT_MODEL_DEFAULT = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB — plenty for a phone photo, keeps the AI call fast
 
 const app = new Hono<{ Bindings: Env }>();
@@ -35,13 +37,13 @@ app.post("/api/extract", async (c) => {
   const buffer = await file.arrayBuffer();
   const dataUrl = `data:${file.type};base64,${arrayBufferToBase64(buffer)}`;
 
+  // --- Step 1: vision model extracts the text from the image ---
   const visionModel = c.env.VISION_MODEL ?? VISION_MODEL_DEFAULT;
-
   console.log(`Using vision model: ${visionModel}`);
 
-  let aiResponse: any;
+  let visionResponse: any;
   try {
-    aiResponse = await c.env.AI.run(visionModel, {
+    visionResponse = await c.env.AI.run(visionModel, {
       messages: [
         { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
         {
@@ -52,27 +54,61 @@ app.post("/api/extract", async (c) => {
           ],
         },
       ],
-      // Constrains the model's output to our schema instead of hoping it
-      // returns clean JSON. See https://developers.cloudflare.com/workers-ai/features/json-mode/
+      max_tokens: 10000,
+      temperature: 0.2,
+    } as any);
+  } catch (err: any) {
+    console.error("Vision AI call failed", err);
+    return c.json({ error: "The Vision AI model call failed.", detail: String(err?.message ?? err) }, 502);
+  }
+
+  if (c.env.LOG_LEVEL === "debug") {
+    console.log("visionResponse", visionResponse);
+  }
+
+  // Extract the text from the vision response
+  const transcribedText = visionResponse?.response ?? visionResponse;
+
+  if (!transcribedText || typeof transcribedText !== "string" || !transcribedText.trim()) {
+    console.error("Vision model returned no transcription text");
+    return c.json({ error: "Couldn't read anything from that photo. Try a clearer, well-lit shot." }, 502);
+  }
+
+  // --- Step 2: text model structures the transcription into strict JSON ---
+  const textModel = c.env.TEXT_MODEL ?? TEXT_MODEL_DEFAULT;
+  console.log(`Using text model: ${textModel}`);
+
+  const structuredPrompt = buildStructureUserPrompt(transcribedText);
+  if (c.env.LOG_LEVEL === "debug") {
+    console.log("structuredPrompt", structuredPrompt);
+  }
+
+  let structureResponse: any;
+  try {
+    structureResponse = await c.env.AI.run(textModel, {
+      messages: [
+        { role: "system", content: STRUCTURE_SYSTEM_PROMPT },
+        { role: "user", content: structuredPrompt },
+      ],
       response_format: {
         type: "json_schema",
         json_schema: scorecardJsonSchema,
       },
-      max_tokens: 15000,
-      temperature: 0.2,
+      max_tokens: 10000,
+      temperature: 0.1,
     } as any);
   } catch (err: any) {
-    console.error("Workers AI call failed", err);
-    return c.json({ error: "The AI model call failed.", detail: String(err?.message ?? err) }, 502);
+    console.error("Structuring call failed", err);
+    return c.json({ error: "The JSON-structuring model call failed.", detail: String(err?.message ?? err) }, 502);
   }
 
   if (c.env.LOG_LEVEL === "debug") {
-    console.log("aiResponse", aiResponse);
+    console.log("structureResponse", structureResponse);
   }
 
-  const extracted = coerceExtractionResult(aiResponse);
+  const extracted = coerceExtractionResult(structureResponse);
   if (!extracted) {
-    console.error("Unexpected AI response shape", JSON.stringify(aiResponse).slice(0, 2000));
+    console.error("Unexpected AI response shape", JSON.stringify(structureResponse).slice(0, 2000));
     return c.json({ error: "The model didn't return valid scorecard JSON. Try a clearer photo." }, 502);
   }
 

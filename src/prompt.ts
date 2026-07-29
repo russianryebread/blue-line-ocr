@@ -35,7 +35,16 @@ Rules:
   - "medium" if some values were ambiguous, smudged, or you had to make a reasonable judgement call
   - "low" if the handwriting was hard to read, largely illegible, or you had to guess significantly
 - Set meta.extractionConfidence to your overall confidence across the whole card.
-- Respond with ONLY the JSON object matching the provided schema. No commentary, no markdown fences.`;
+- Respond with ONLY the data. No commentary, no markdown fences.
+- GAME NOTES should contain anything else written on the card -- referee notes, corrections, etc.)
+`;
 
 export const EXTRACTION_USER_PROMPT =
-  "Transcribe this hockey scorecard photo into the JSON schema you were given. Every field in the schema must be present, using empty strings/0/[] for anything blank or unreadable.";
+  "Transcribe this hockey scorecard photo into structured data. Every field in the schema must be present, using empty strings/0/[] for anything blank or unreadable.";
+
+
+export const STRUCTURE_SYSTEM_PROMPT = `You convert a plain-text hockey scorecard transcription into a specific JSON schema.`;
+
+export function buildStructureUserPrompt(transcription: string): string {
+  return `Here is the raw transcription of a hockey scorecard:\n\n${transcription}\n\nConvert it into the EXACT JSON schema you were given.`;
+}
