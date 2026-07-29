@@ -1,5 +1,10 @@
 import { Hono } from "hono";
-import { buildStructureUserPrompt, EXTRACTION_SYSTEM_PROMPT, EXTRACTION_USER_PROMPT, STRUCTURE_SYSTEM_PROMPT } from "./prompt";
+import {
+  TRANSCRIBE_SYSTEM_PROMPT,
+  TRANSCRIBE_USER_PROMPT,
+  STRUCTURE_SYSTEM_PROMPT,
+  buildStructureUserPrompt,
+} from "./prompt";
 import { scorecardJsonSchema, type ExtractionResult, type Scorecard } from "./schema";
 
 export interface Env {
@@ -10,8 +15,9 @@ export interface Env {
   readonly VISION_MODEL: string;
   readonly TEXT_MODEL: string;
 }
+
 const VISION_MODEL_DEFAULT = "@cf/meta/llama-3.2-11b-vision-instruct";
-const TEXT_MODEL_DEFAULT = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const STRUCTURING_MODEL_DEFAULT = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB — plenty for a phone photo, keeps the AI call fast
 
 const app = new Hono<{ Bindings: Env }>();
@@ -37,48 +43,52 @@ app.post("/api/extract", async (c) => {
   const buffer = await file.arrayBuffer();
   const dataUrl = `data:${file.type};base64,${arrayBufferToBase64(buffer)}`;
 
-  // --- Step 1: vision model extracts the text from the image ---
+  // --- Step 1: vision model transcribes the photo as plain labelled text ---
   const visionModel = c.env.VISION_MODEL ?? VISION_MODEL_DEFAULT;
   console.log(`Using vision model: ${visionModel}`);
-
-  let visionResponse: any;
+  let transcription: string;
   try {
-    visionResponse = await c.env.AI.run(visionModel, {
+    const visionResponse: any = await c.env.AI.run(visionModel, {
       messages: [
-        { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
+        { role: "system", content: TRANSCRIBE_SYSTEM_PROMPT },
         {
           role: "user",
           content: [
-            { type: "text", text: EXTRACTION_USER_PROMPT },
+            { type: "text", text: TRANSCRIBE_USER_PROMPT },
             { type: "image_url", image_url: { url: dataUrl } },
           ],
         },
       ],
       max_tokens: 10000,
       temperature: 0.2,
-    } as any);
+    } as any,
+      {
+        extraHeaders: {
+          "x-session-affinity": "ses_12345678",
+        },
+      },
+    );
+    transcription = typeof visionResponse?.response === "string" ? visionResponse.response : "";
+
+    if (c.env.LOG_LEVEL === "debug") {
+      console.log("visionResponse", visionResponse);
+    }
+
   } catch (err: any) {
-    console.error("Vision AI call failed", err);
-    return c.json({ error: "The Vision AI model call failed.", detail: String(err?.message ?? err) }, 502);
+    console.error("Vision transcription call failed", err);
+    return c.json({ error: "The vision model call failed.", detail: String(err?.message ?? err) }, 502);
   }
 
-  if (c.env.LOG_LEVEL === "debug") {
-    console.log("visionResponse", visionResponse);
-  }
-
-  // Extract the text from the vision response
-  const transcribedText = visionResponse?.response ?? visionResponse;
-
-  if (!transcribedText || typeof transcribedText !== "string" || !transcribedText.trim()) {
+  if (!transcription.trim()) {
     console.error("Vision model returned no transcription text");
     return c.json({ error: "Couldn't read anything from that photo. Try a clearer, well-lit shot." }, 502);
   }
 
   // --- Step 2: text model structures the transcription into strict JSON ---
-  const textModel = c.env.TEXT_MODEL ?? TEXT_MODEL_DEFAULT;
+  const textModel = c.env.TEXT_MODEL ?? STRUCTURING_MODEL_DEFAULT;
   console.log(`Using text model: ${textModel}`);
 
-  const structuredPrompt = buildStructureUserPrompt(transcribedText);
+  const structuredPrompt = buildStructureUserPrompt(transcription);
   if (c.env.LOG_LEVEL === "debug") {
     console.log("structuredPrompt", structuredPrompt);
   }
@@ -88,7 +98,7 @@ app.post("/api/extract", async (c) => {
     structureResponse = await c.env.AI.run(textModel, {
       messages: [
         { role: "system", content: STRUCTURE_SYSTEM_PROMPT },
-        { role: "user", content: structuredPrompt },
+        { role: "user", content: buildStructureUserPrompt(transcription) },
       ],
       response_format: {
         type: "json_schema",
@@ -108,7 +118,7 @@ app.post("/api/extract", async (c) => {
 
   const extracted = coerceExtractionResult(structureResponse);
   if (!extracted) {
-    console.error("Unexpected AI response shape", JSON.stringify(structureResponse).slice(0, 2000));
+    console.error("Unexpected structuring response shape", JSON.stringify(structureResponse).slice(0, 2000));
     return c.json({ error: "The model didn't return valid scorecard JSON. Try a clearer photo." }, 502);
   }
 

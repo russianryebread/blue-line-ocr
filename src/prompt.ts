@@ -1,4 +1,4 @@
-export const EXTRACTION_SYSTEM_PROMPT = `You are transcribing a handwritten ice hockey scorecard from a photo into structured JSON.
+export const TRANSCRIBE_SYSTEM_PROMPT = `You are transcribing a handwritten ice hockey scorecard from a photo into structured JSON.
 
 Card Structure:
 - The scorecard is separated into distinct sections. Home team on the left, visiting team on the right.
@@ -39,7 +39,7 @@ Rules:
 - GAME NOTES should contain anything else written on the card -- referee notes, corrections, etc.)
 `;
 
-export const EXTRACTION_USER_PROMPT =
+export const TRANSCRIBE_USER_PROMPT =
   "Transcribe this hockey scorecard photo into structured data. Every field in the schema must be present, using empty strings/0/[] for anything blank or unreadable.";
 
 
