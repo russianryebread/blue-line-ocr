@@ -11,14 +11,12 @@ export interface Env {
   AI: Ai;
   DB: D1Database;
   ASSETS: Fetcher;
+  readonly LOG_LEVEL: string;
 }
 
 // Step 1: reads the photo, writes a plain-text labelled transcription.
+// Step 2: text-only model, converts the transcription into strict JSON via JSON Mode.
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
-// Step 2: text-only model, converts the transcription into strict JSON via
-// JSON Mode. Vision models here have been unreliable at honoring
-// response_format when the input also contains an image, so structuring is
-// split into its own text-only call. See README for details.
 const STRUCTURING_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB — plenty for a phone photo, keeps the AI call fast
 
@@ -73,6 +71,10 @@ app.post("/api/extract", async (c) => {
     return c.json({ error: "Couldn't read anything from that photo. Try a clearer, well-lit shot." }, 502);
   }
 
+  if (c.env.LOG_LEVEL === "debug") {
+    console.log("transcription", transcription);
+  }
+
   // --- Step 2: text model structures the transcription into strict JSON ---
   let structureResponse: any;
   try {
@@ -91,6 +93,10 @@ app.post("/api/extract", async (c) => {
   } catch (err: any) {
     console.error("Structuring call failed", err);
     return c.json({ error: "The JSON-structuring model call failed.", detail: String(err?.message ?? err) }, 502);
+  }
+
+  if (c.env.LOG_LEVEL === "debug") {
+    console.log("structureResponse", structureResponse);
   }
 
   const extracted = coerceExtractionResult(structureResponse);
