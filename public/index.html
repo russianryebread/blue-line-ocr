@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>Hockey Scorecard Scanner</title>
+  <title>Blue-Line Scanner</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <header class="topbar">
-    <h1>🏒 Scorecard Scanner</h1>
+    <h1>Blue-Line Scanner</h1>
     <nav class="tabs">
       <button id="tab-scan" class="tab active" data-view="scan">Scan</button>
       <button id="tab-history" class="tab" data-view="history">History</button>
@@ -32,7 +32,7 @@
 
       <div id="loading" class="card" hidden>
         <div class="spinner"></div>
-        <p>Reading the scorecard&hellip;</p>
+        <p class="center" id="loading-message">Uploading&hellip;</p>
       </div>
 
       <div id="error-banner" class="error" hidden></div>

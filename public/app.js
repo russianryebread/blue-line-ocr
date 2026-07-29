@@ -58,6 +58,20 @@ $("#extract-btn").addEventListener("click", async () => {
   hideError();
   $("#review").hidden = true;
   $("#loading").hidden = false;
+  $("#extract-btn").hidden = true;
+
+  // display a random loading message rotating through them every 3 seconds
+  const messages = [
+    "Reading the scorecard...",
+    "Extracting data...",
+    "Analyzing...",
+    "Processing...",
+  ];
+  let i = 0;
+  const interval = setInterval(() => {
+    $("#loading-message").textContent = messages[i];
+    i = (i + 1) % messages.length;
+  }, 3000);
 
   try {
     const form = new FormData();
@@ -72,6 +86,8 @@ $("#extract-btn").addEventListener("click", async () => {
     showError(err.message || String(err));
   } finally {
     $("#loading").hidden = true;
+    $("#extract-btn").hidden = false;
+    clearInterval(interval);
   }
 });
 
