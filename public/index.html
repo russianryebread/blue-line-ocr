@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Hockey Scorecard Scanner</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>🏒 Scorecard Scanner</h1>
+    <nav class="tabs">
+      <button id="tab-scan" class="tab active" data-view="scan">Scan</button>
+      <button id="tab-history" class="tab" data-view="history">History</button>
+    </nav>
+  </header>
+
+  <main id="app">
+
+    <!-- SCAN VIEW -->
+    <section id="view-scan" class="view active">
+
+      <div id="upload-card" class="card">
+        <p class="hint">Take a photo of a scorecard, or upload an existing image.</p>
+        <label class="file-btn">
+          📷 Take / Choose Photo
+          <input id="image-input" type="file" accept="image/*" capture="environment" hidden />
+        </label>
+        <img id="preview" class="preview" hidden />
+        <button id="extract-btn" class="primary-btn" hidden>Extract Data</button>
+      </div>
+
+      <div id="loading" class="card" hidden>
+        <div class="spinner"></div>
+        <p>Reading the scorecard&hellip;</p>
+      </div>
+
+      <div id="error-banner" class="error" hidden></div>
+
+      <div id="review" class="card" hidden>
+        <div class="review-header">
+          <h2>Review &amp; Correct</h2>
+          <p class="hint">Fields the model was less sure about are flagged below. Edit anything before saving.</p>
+        </div>
+        <div id="review-body"></div>
+
+        <div class="actions">
+          <button id="save-btn" class="primary-btn">💾 Save to History</button>
+          <button id="download-btn" class="secondary-btn">⬇️ Download JSON</button>
+          <button id="reset-btn" class="text-btn">Start Over</button>
+        </div>
+        <p id="save-status" class="hint"></p>
+      </div>
+
+    </section>
+
+    <!-- HISTORY VIEW -->
+    <section id="view-history" class="view">
+      <div class="card">
+        <h2>Saved Games</h2>
+        <div id="history-list"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+name = "hockey-scorecard-ocr"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Serves everything in ./public directly (index.html, app.js, style.css).
+# Requests that don't match a static file (e.g. /api/*) fall through to the Worker.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hockey-scorecards"
+# Replace with the ID printed by: wrangler d1 create hockey-scorecards
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[observability]
+enabled = true
