@@ -20,3 +20,10 @@ database_id = "d3b35bca-773a-4b6e-82f2-39553d01eb41"
 
 [observability]
 enabled = true
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
