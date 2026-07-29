@@ -1,4 +1,4 @@
-name = "hockey-scorecard-ocr"
+name = "blue-line-ocr"
 main = "src/index.ts"
 compatibility_date = "2026-07-01"
 compatibility_flags = ["nodejs_compat"]
@@ -16,7 +16,7 @@ binding = "AI"
 binding = "DB"
 database_name = "hockey-scorecards"
 # Replace with the ID printed by: wrangler d1 create hockey-scorecards
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "d3b35bca-773a-4b6e-82f2-39553d01eb41"
 
 [observability]
 enabled = true
