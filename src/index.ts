@@ -44,7 +44,7 @@ app.post("/api/extract", async (c) => {
 
   const openai = new OpenAI({
       apiKey: c.env.MOONSHOT_API_KEY,
-      baseURL: "https://api.moonshot.cn/v1",
+      baseURL: "https://api.moonshot.ai/v1",
     });
 
   let aiResponse: OpenAI.Chat.Completions.ChatCompletion;
@@ -69,8 +69,8 @@ app.post("/api/extract", async (c) => {
           schema: scorecardJsonSchema
         },
       },
-      max_tokens: 15000,
-      temperature: 0.2,
+      reasoning_effort: "none",
+      max_tokens: 1500,
     });
   } catch (err: any) {
     console.error("AI Model API call failed", err);
@@ -78,7 +78,7 @@ app.post("/api/extract", async (c) => {
   }
 
   if (c.env.LOG_LEVEL === "debug") {
-    console.log("aiResponse", aiResponse);
+    console.log("aiResponse", aiResponse, aiResponse.choices[0]?.message);
   }
 
   const content = aiResponse.choices[0]?.message?.content;

@@ -37,7 +37,8 @@ Rules:
   - "medium" if some values were ambiguous, smudged, or you had to make a reasonable judgement call
   - "low" if the handwriting was hard to read, largely illegible, or you had to guess significantly
 - Set meta.extractionConfidence to your overall confidence across the whole card.
-- Respond with ONLY the JSON object matching the provided schema. No commentary, no markdown fences.`;
+- Respond with ONLY the JSON object matching the provided schema. No commentary, no markdown fences.
+- Return ONLY valid JSON matching the schema. Put JSON in the normal assistant content field. Do not include explanations.`;
 
 export const EXTRACTION_USER_PROMPT =
-  "Transcribe this hockey scorecard photo into the JSON schema you were given. Every field in the schema must be present, using empty strings/0/[] for anything blank or unreadable.";
+  "Transcribe this hockey scorecard photo into the JSON schema you were given. Every field in the schema must be present, using empty strings/0/[] for anything blank or unreadable. Return ONLY valid JSON matching the schema. Put JSON in the normal assistant content field. Do not include explanations.";
