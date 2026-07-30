@@ -9,6 +9,10 @@ compatibility_flags = ["nodejs_compat"]
 directory = "./public"
 binding = "ASSETS"
 
+[vars]
+LOG_LEVEL = "debug"
+VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
+
 [ai]
 binding = "AI"
 
