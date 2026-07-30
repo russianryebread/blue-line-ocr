@@ -9,6 +9,10 @@ compatibility_flags = ["nodejs_compat"]
 directory = "./public"
 binding = "ASSETS"
 
+[vars]
+LOG_LEVEL = "debug"
+VISION_MODEL = "kimi-k3"
+
 [ai]
 binding = "AI"
 
