@@ -1,3 +1,5 @@
+import { scorecardJsonSchema } from "./schema";
+
 export const EXTRACTION_SYSTEM_PROMPT = `You are transcribing a handwritten ice hockey scorecard from a photo into structured JSON.
 
 Card Structure:

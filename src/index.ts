@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { EXTRACTION_SYSTEM_PROMPT, EXTRACTION_USER_PROMPT } from "./prompt";
 import { scorecardJsonSchema, type ExtractionResult, type Scorecard } from "./schema";
+import OpenAI from "openai";
 
 export interface Env {
   AI: Ai;
@@ -8,8 +9,9 @@ export interface Env {
   ASSETS: Fetcher;
   readonly LOG_LEVEL: string;
   readonly VISION_MODEL: string;
+  readonly MOONSHOT_API_KEY: string;
 }
-const VISION_MODEL_DEFAULT = "@cf/meta/llama-3.2-11b-vision-instruct";
+const VISION_MODEL_DEFAULT = "kimi-k3";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8MB — plenty for a phone photo, keeps the AI call fast
 
 const app = new Hono<{ Bindings: Env }>();
@@ -35,13 +37,20 @@ app.post("/api/extract", async (c) => {
   const buffer = await file.arrayBuffer();
   const dataUrl = `data:${file.type};base64,${arrayBufferToBase64(buffer)}`;
 
+  // Default to Moonshot's vision model (or set via environment variable MOONSHOT_MODEL)
   const visionModel = c.env.VISION_MODEL ?? VISION_MODEL_DEFAULT;
 
   console.log(`Using vision model: ${visionModel}`);
 
-  let aiResponse: any;
+  const openai = new OpenAI({
+      apiKey: c.env.MOONSHOT_API_KEY,
+      baseURL: "https://api.moonshot.cn/v1",
+    });
+
+  let aiResponse: OpenAI.Chat.Completions.ChatCompletion;
   try {
-    aiResponse = await c.env.AI.run(visionModel, {
+    aiResponse = await openai.chat.completions.create({
+      model: visionModel,
       messages: [
         { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
         {
@@ -52,17 +61,19 @@ app.post("/api/extract", async (c) => {
           ],
         },
       ],
-      // Constrains the model's output to our schema instead of hoping it
-      // returns clean JSON. See https://developers.cloudflare.com/workers-ai/features/json-mode/
       response_format: {
         type: "json_schema",
-        json_schema: scorecardJsonSchema,
+        json_schema: {
+          name: "scorecard",
+          strict: true,
+          schema: scorecardJsonSchema
+        },
       },
       max_tokens: 15000,
       temperature: 0.2,
-    } as any);
+    });
   } catch (err: any) {
-    console.error("Workers AI call failed", err);
+    console.error("AI Model API call failed", err);
     return c.json({ error: "The AI model call failed.", detail: String(err?.message ?? err) }, 502);
   }
 
@@ -70,13 +81,18 @@ app.post("/api/extract", async (c) => {
     console.log("aiResponse", aiResponse);
   }
 
-  const extracted = coerceExtractionResult(aiResponse);
-  if (!extracted) {
-    console.error("Unexpected AI response shape", JSON.stringify(aiResponse).slice(0, 2000));
-    return c.json({ error: "The model didn't return valid scorecard JSON. Try a clearer photo." }, 502);
+  const content = aiResponse.choices[0]?.message?.content;
+  if (!content) {
+    return c.json({ error: "The model didn't return any content." }, 502);
   }
 
-  return c.json(extracted);
+  try {
+    const extracted = JSON.parse(content);
+    return c.json(extracted);
+  } catch (err) {
+    console.error("Failed to parse output JSON", content);
+    return c.json({ error: "Failed to parse model response into JSON." }, 502);
+  }
 });
 
 // ---------------------------------------------------------------------------
