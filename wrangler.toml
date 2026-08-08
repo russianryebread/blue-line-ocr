@@ -18,12 +18,14 @@ not_found_handling = "single-page-application"
 [vars]
 LOG_LEVEL = "debug"
 VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
+SCORECARD_DEBUG = "false"
 # Optional external historical-artifact endpoint.
 HISTORICAL_API_URL = ""
 
 # Existing Workers AI binding. The OCR pipeline reads VISION_MODEL from env.
 [ai]
 binding = "AI"
+remote = true
 
 # Existing D1 database and ID.
 [[d1_databases]]

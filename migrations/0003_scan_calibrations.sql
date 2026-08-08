@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS scan_calibrations (
+  id TEXT PRIMARY KEY,
+  version INTEGER NOT NULL DEFAULT 1,
+  config_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

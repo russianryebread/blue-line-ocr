@@ -1,4 +1,5 @@
 import type { GameSummary, OCRBundle, SavedGame, Scorecard } from '@/shared/scorecard'
+import type { ScanCalibration } from '@/shared/calibration'
 
 export interface ScanResponse {
   scorecard: Scorecard
@@ -8,6 +9,11 @@ export interface ScanResponse {
     deskewAngle: number
     regions: string[]
   }
+}
+
+export interface AppConfig {
+  debug: boolean
+  calibration?: ScanCalibration
 }
 
 async function request<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
@@ -20,6 +26,12 @@ async function request<T>(input: RequestInfo | URL, init?: RequestInit): Promise
 }
 
 export const api = {
+  getConfig: () => request<AppConfig>('/api/config'),
+  saveCalibration: (calibration: ScanCalibration) => request<{ calibration: ScanCalibration }>('/api/debug/calibration', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ calibration })
+  }),
   listGames: () => request<GameSummary[]>('/api/games'),
   getGame: (id: string) => request<SavedGame>(`/api/games/${encodeURIComponent(id)}`),
   saveGame: (scorecard: Scorecard, ocr?: OCRBundle | null) => request<SavedGame>(

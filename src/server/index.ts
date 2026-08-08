@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { Context } from 'hono'
 import type { GameSummary, OCRBundle, OCRRegionResult, Scorecard } from '@/shared/scorecard'
 import { blankScorecard } from '@/shared/scorecard'
+import { cloneCalibration, DEFAULT_CALIBRATION, type CalibrationRegion, type ScanCalibration } from '@/shared/calibration'
 import { applyOCRToScorecard, recognizeRegion } from './ocr'
 
 type AppBindings = {
@@ -127,6 +128,55 @@ function commonHeaders(): Record<string, string> {
     'x-content-type-options': 'nosniff'
   }
 }
+
+function debugEnabled(env: Env): boolean {
+  const value = String(env.SCORECARD_DEBUG).toLowerCase()
+  return value === 'true' || value === '1'
+}
+
+function clamp(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback
+}
+
+function sanitizeCalibration(input: unknown): ScanCalibration {
+  const candidate = input && typeof input === 'object' ? input as Partial<ScanCalibration> : {}
+  const next = cloneCalibration(DEFAULT_CALIBRATION)
+  next.version = Math.max(1, Math.round(clamp(candidate.version, 1, 999, 1)))
+  next.preprocessing.maxDimension = Math.round(clamp(candidate.preprocessing?.maxDimension, 1000, 5000, next.preprocessing.maxDimension))
+  next.preprocessing.contrast = clamp(candidate.preprocessing?.contrast, 0.8, 2.2, next.preprocessing.contrast)
+  const regions = candidate.regions && typeof candidate.regions === 'object' ? candidate.regions as Record<string, Partial<CalibrationRegion>> : {}
+  Object.entries(next.regions).forEach(([key, region]) => {
+    const override = regions[key]
+    if (!override) return
+    region.x = clamp(override.x, 0, 0.98, region.x)
+    region.y = clamp(override.y, 0, 0.98, region.y)
+    region.width = clamp(override.width, 0.02, 1 - region.x, region.width)
+    region.height = clamp(override.height, 0.02, 1 - region.y, region.height)
+  })
+  next.updatedAt = new Date().toISOString()
+  return next
+}
+
+app.get('/api/config', async c => {
+  if (!debugEnabled(c.env)) return c.json({ debug: false }, 200, commonHeaders())
+  const row = await c.env.DB.prepare('SELECT config_json, updated_at FROM scan_calibrations WHERE id = ?').bind('default').first<{ config_json: string; updated_at: string }>()
+  const calibration = row ? sanitizeCalibration(JSON.parse(row.config_json)) : cloneCalibration(DEFAULT_CALIBRATION)
+  calibration.updatedAt = row?.updated_at || calibration.updatedAt
+  return c.json({ debug: true, calibration }, 200, commonHeaders())
+})
+
+app.put('/api/debug/calibration', async c => {
+  if (!debugEnabled(c.env)) return jsonError(c, 'Debug mode is disabled.', 404)
+  const payload = await c.req.json<{ calibration?: unknown }>().catch(() => null)
+  if (!payload?.calibration) return jsonError(c, 'A calibration object is required.')
+  const calibration = sanitizeCalibration(payload.calibration)
+  await c.env.DB.prepare(
+    `INSERT INTO scan_calibrations (id, version, config_json, updated_at) VALUES ('default', ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET version = excluded.version, config_json = excluded.config_json, updated_at = excluded.updated_at`
+  ).bind(calibration.version, JSON.stringify(calibration), calibration.updatedAt).run()
+  return c.json({ calibration }, 200, commonHeaders())
+})
 
 app.get('/api/games', async c => {
   const result = await c.env.DB.prepare(

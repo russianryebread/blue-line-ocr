@@ -43,6 +43,16 @@ npm run db:migrate:local
 npm run db:migrate:remote
 ```
 
+## Calibration debug mode
+
+Set `SCORECARD_DEBUG=true` in the Worker environment to expose the pipeline inspector. It shows the oriented, deskewed, document-cropped, cleaned, region-map, and individual section images. The calibration editor lets you adjust region X/Y/width/height values, preprocessing size, and contrast, then save the next default calibration to the `scan_calibrations` D1 table.
+
+The debug route is disabled unless the environment flag is enabled. Run the remote-bound browser preview with:
+
+```bash
+npx wrangler dev --remote --var SCORECARD_DEBUG:true
+```
+
 The section OCR pipeline uses the already-configured `VISION_MODEL` environment variable and `AI` Workers AI binding. Its current value is `@cf/meta/llama-3.2-11b-vision-instruct`. Set `HISTORICAL_API_URL` in `wrangler.toml` for the archive handoff and store the token as a Worker secret:
 
 ```bash
@@ -59,3 +69,7 @@ npx wrangler secret put HISTORICAL_API_TOKEN
 - `src/server/index.ts` — Hono API routes, D1 persistence, and historical API delivery.
 - `migrations/0001_init.sql` — existing D1 schema retained for migration compatibility.
 - `migrations/0002_rink_record.sql` — rebuilt editor fields and backfill.
+- `migrations/0003_scan_calibrations.sql` — persisted debug crop/preprocessing calibration.
+- `migrations/0004_visitor_score.sql` — compatibility column for the rebuilt visitor score API.
+- `src/client/components/DebugPanel.vue` — intermediate image artifacts and calibration controls.
+- `src/shared/calibration.ts` — versioned default scorecard region map.

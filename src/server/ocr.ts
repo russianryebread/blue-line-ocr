@@ -16,7 +16,7 @@ interface VisionInput extends Record<string, unknown> {
 }
 
 interface VisionOutput {
-  response?: string
+  response?: unknown
 }
 
 interface OCRJson {
@@ -26,13 +26,19 @@ interface OCRJson {
 }
 
 const REGION_INSTRUCTIONS: Record<string, string> = {
-  header: 'Extract date, time, venue, division, home team, and visitor team.',
+  header: 'Extract date, time, venue if visible, division, home team, visitor team, referees, and scorekeeper from the header. Use keys game.date, game.time, game.venue, game.division, home.name, visitor.name, officials.referees.0, officials.referees.1, and officials.scorekeeper.',
   homeRoster: 'Extract every visible home player as a jersey number and player name. Use keys home.players.0.number and home.players.0.name, incrementing the index.',
   visitorRoster: 'Extract every visible visitor player as a jersey number and player name. Use keys visitor.players.0.number and visitor.players.0.name, incrementing the index.',
-  scoring: 'Extract period scores using score.home.p1, score.home.p2, score.home.p3, score.home.ot, score.visitor.p1, score.visitor.p2, score.visitor.p3, and score.visitor.ot. Extract visible goal events with keys goals.0.team, goals.0.period, goals.0.time, goals.0.scorer, goals.0.assist1, and goals.0.assist2.',
-  goalies: 'Extract goalie names into home.goalies.0, home.goalies.1, visitor.goalies.0, and visitor.goalies.1 when visible.',
-  penalties: 'Extract visible penalty rows into penalties.0.team, penalties.0.period, penalties.0.time, penalties.0.playerNumber, penalties.0.player, penalties.0.minutes, and penalties.0.infraction, incrementing the index.',
-  officials: 'Extract officials into officials.referees.0, officials.referees.1, officials.scorekeeper, and any notes into notes.'
+  scoring: 'Extract period scores using score.home.p1, score.home.p2, score.home.p3, score.home.ot, score.home.total, score.visitor.p1, score.visitor.p2, score.visitor.p3, score.visitor.ot, and score.visitor.total. Do not extract goal events from this crop.',
+  goalsHome: 'Extract visible home goal events using keys goals.0.team (home), goals.0.period, goals.0.time, goals.0.scorer, goals.0.assist1, and goals.0.assist2, incrementing the index. If the table is empty, return no fields.',
+  goalsVisitor: 'Extract visible visitor goal events using keys goals.0.team (visitor), goals.0.period, goals.0.time, goals.0.scorer, goals.0.assist1, and goals.0.assist2, incrementing the index. If the table is empty, return no fields.',
+  homeGoalie: 'Extract the home goalie name into home.goalies.0. Ignore printed table lines and numeric totals unless they are clearly handwritten.',
+  visitorGoalie: 'Extract the visitor goalie name into visitor.goalies.0. Ignore printed table lines and numeric totals unless they are clearly handwritten.',
+  homePenaltiesA: 'Extract visible home penalty rows into penalties.0.team (home), penalties.0.period, penalties.0.time, penalties.0.playerNumber, penalties.0.player, penalties.0.minutes, and penalties.0.infraction, incrementing the index. If empty, return no fields.',
+  homePenaltiesB: 'Extract visible home penalty rows into penalties.0.team (home), penalties.0.period, penalties.0.time, penalties.0.playerNumber, penalties.0.player, penalties.0.minutes, and penalties.0.infraction, incrementing the index. If empty, return no fields.',
+  visitorPenaltiesA: 'Extract visible visitor penalty rows into penalties.0.team (visitor), penalties.0.period, penalties.0.time, penalties.0.playerNumber, penalties.0.player, penalties.0.minutes, and penalties.0.infraction, incrementing the index. If empty, return no fields.',
+  visitorPenaltiesB: 'Extract visible visitor penalty rows into penalties.0.team (visitor), penalties.0.period, penalties.0.time, penalties.0.playerNumber, penalties.0.player, penalties.0.minutes, and penalties.0.infraction, incrementing the index. If empty, return no fields.',
+  notes: 'Extract only handwritten notes from the bottom of the sheet into notes. If empty, return no fields.'
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -44,11 +50,18 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-function extractJson(text: string): OCRJson {
-  const cleaned = text.replace(/```json|```/gi, '').trim()
+function responseText(response: unknown): string {
+  if (typeof response === 'string') return response
+  if (response && typeof response === 'object') return JSON.stringify(response)
+  return response == null ? '' : String(response)
+}
+
+function extractJson(text: unknown): OCRJson {
+  const rawText = responseText(text)
+  const cleaned = rawText.replace(/```json|```/gi, '').trim()
   const start = cleaned.indexOf('{')
   const end = cleaned.lastIndexOf('}')
-  if (start < 0 || end <= start) return { rawText: text, fields: [] }
+  if (start < 0 || end <= start) return { rawText, fields: [] }
   try {
     const parsed = JSON.parse(cleaned.slice(start, end + 1)) as OCRJson
     return {
@@ -57,16 +70,24 @@ function extractJson(text: string): OCRJson {
       fields: Array.isArray(parsed.fields) ? parsed.fields : []
     }
   } catch {
-    return { rawText: text, fields: [] }
+    return { rawText, fields: [] }
   }
 }
 
-function normalizeFields(fields: OCRJson['fields'], region: string): OCRField[] {
-  return (fields ?? []).filter(field => field.key).map(field => ({
+const PLACEHOLDER_VALUES = new Set(['unknown', 'not visible', 'none', 'n/a', 'na', 'null', '...', 'john doe', 'jane smith'])
+
+function normalizeFields(fields: OCRJson['fields'], region: string, fallbackConfidence: number): OCRField[] {
+  return (fields ?? []).filter(field => {
+    if (!field.key) return false
+    const value = field.value === null || field.value === undefined ? '' : String(field.value).trim()
+    return !PLACEHOLDER_VALUES.has(value.toLowerCase())
+  }).map(field => ({
     key: field.key,
     label: field.label || field.key,
     value: field.value === null || field.value === undefined ? '' : String(field.value),
-    confidence: typeof field.confidence === 'number' ? Math.max(0, Math.min(1, field.confidence)) : 0.45,
+    confidence: typeof field.confidence === 'number' && field.confidence > 0
+      ? Math.max(0, Math.min(1, field.confidence))
+      : fallbackConfidence,
     source: field.source || region,
     reviewed: false
   }))
@@ -98,13 +119,16 @@ export async function recognizeRegion(
   const model = env.VISION_MODEL || VISION_MODEL_DEFAULT
   const result = await env.AI.run(model, input)
   const output = result as VisionOutput
-  const parsed = extractJson(output.response || '')
-  const fields = normalizeFields(parsed.fields, region)
+  const parsed = extractJson(output.response)
+  const fallbackConfidence = typeof parsed.confidence === 'number' && parsed.confidence > 0
+    ? Math.max(0, Math.min(1, parsed.confidence))
+    : 0.45
+  const fields = normalizeFields(parsed.fields, region, fallbackConfidence)
   return {
     region,
     fields,
-    rawText: parsed.rawText || output.response || '',
-    confidence: parsed.confidence ?? (fields.length ? fields.reduce((sum, field) => sum + field.confidence, 0) / fields.length : 0.25)
+    rawText: parsed.rawText || responseText(output.response),
+    confidence: fallbackConfidence || (fields.length ? fields.reduce((sum, field) => sum + field.confidence, 0) / fields.length : 0.25)
   }
 }
 

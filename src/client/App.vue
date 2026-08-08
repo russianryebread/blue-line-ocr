@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import ConfidencePanel from './components/ConfidencePanel.vue'
+import DebugPanel from './components/DebugPanel.vue'
 import ScanProgress from './components/ScanProgress.vue'
 import ScorecardEditor from './components/ScorecardEditor.vue'
 import { api } from './services/api'
-import { inspectScan, orientationPreview, prepareScan, type PipelineStep, type ScanInspection } from './services/imagePipeline'
+import { inspectScan, orientationPreview, prepareScan, type PipelineArtifact, type PipelineStep, type ScanInspection } from './services/imagePipeline'
+import { cloneCalibration, DEFAULT_CALIBRATION, type ScanCalibration } from '@/shared/calibration'
 import type { GameSummary, OCRBundle, OCRField, SavedGame, Scorecard } from '@/shared/scorecard'
 import { blankScorecard } from '@/shared/scorecard'
 
@@ -26,6 +28,10 @@ const errorMessage = ref('')
 const notice = ref('')
 const dirty = ref(false)
 const archiveState = ref<'idle' | 'sending' | 'sent'>('idle')
+const debugEnabled = ref(false)
+const calibration = ref<ScanCalibration>(cloneCalibration(DEFAULT_CALIBRATION))
+const artifacts = ref<PipelineArtifact[]>([])
+const savingCalibration = ref(false)
 
 const gameTitle = computed(() => `${scorecard.value.home.name || 'Home team'} vs ${scorecard.value.visitor.name || 'Visitor'}`)
 const isBusy = computed(() => ['preparing', 'ocr', 'saving'].includes(scanStatus.value))
@@ -54,11 +60,13 @@ async function beginScan(file: File) {
   }
   errorMessage.value = ''
   notice.value = ''
-  cleanupPreview(orientationPreviewUrl)
-  cleanupPreview(sourcePreview)
+  clearScanArtifacts()
   try {
     inspection.value = await inspectScan(file)
     orientationPreviewUrl.value = inspection.value.originalPreviewUrl
+    if (debugEnabled.value) {
+      artifacts.value.push({ id: 'original', label: 'Original', url: inspection.value.originalPreviewUrl, detail: `${inspection.value.orientation} source image` })
+    }
     rotation.value = 0
     scanStatus.value = 'orientation'
     view.value = 'orientation'
@@ -85,8 +93,10 @@ async function processScan() {
   scanStatus.value = 'preparing'
   pipelineStep.value = 'deskew'
   try {
-    const prepared = await prepareScan(inspection.value, rotation.value, step => {
+    const prepared = await prepareScan(inspection.value, rotation.value, calibration.value, step => {
       pipelineStep.value = step
+    }, artifact => {
+      if (debugEnabled.value) artifacts.value.push(artifact)
     })
     cleanupPreview(sourcePreview)
     sourcePreview.value = prepared.previewUrl
@@ -106,8 +116,7 @@ async function processScan() {
 }
 
 function cancelScan() {
-  cleanupPreview(orientationPreviewUrl)
-  cleanupPreview(sourcePreview)
+  clearScanArtifacts()
   inspection.value = null
   rotation.value = 0
   scanStatus.value = 'idle'
@@ -118,6 +127,45 @@ function cancelScan() {
 function cleanupPreview(value: { value: string | null }, keep?: string) {
   if (value.value && value.value !== keep) URL.revokeObjectURL(value.value)
   value.value = null
+}
+
+function clearScanArtifacts() {
+  const urls = new Set<string>()
+  artifacts.value.forEach(artifact => urls.add(artifact.url))
+  if (orientationPreviewUrl.value) urls.add(orientationPreviewUrl.value)
+  if (sourcePreview.value) urls.add(sourcePreview.value)
+  urls.forEach(url => URL.revokeObjectURL(url))
+  artifacts.value = []
+  orientationPreviewUrl.value = null
+  sourcePreview.value = null
+}
+
+async function loadConfig() {
+  try {
+    const config = await api.getConfig()
+    debugEnabled.value = config.debug
+    if (config.calibration) calibration.value = config.calibration
+  } catch {
+    debugEnabled.value = false
+  }
+}
+
+async function saveCalibration() {
+  if (!debugEnabled.value) return
+  savingCalibration.value = true
+  try {
+    const result = await api.saveCalibration(calibration.value)
+    calibration.value = result.calibration
+    notice.value = 'Calibration saved for future scans.'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Calibration could not be saved.'
+  } finally {
+    savingCalibration.value = false
+  }
+}
+
+function resetCalibration() {
+  calibration.value = cloneCalibration(DEFAULT_CALIBRATION)
 }
 
 async function loadGames() {
@@ -133,8 +181,7 @@ async function openGame(id: string) {
     const game: SavedGame = await api.getGame(id)
     scorecard.value = game.scorecard
     ocr.value = game.ocr || null
-    cleanupPreview(sourcePreview)
-    cleanupPreview(orientationPreviewUrl)
+    clearScanArtifacts()
     inspection.value = null
     dirty.value = false
     archiveState.value = game.status === 'archived' ? 'sent' : 'idle'
@@ -230,10 +277,12 @@ function scorecardChanged() {
   notice.value = ''
 }
 
-onMounted(loadGames)
+onMounted(() => {
+  void loadGames()
+  void loadConfig()
+})
 onUnmounted(() => {
-  cleanupPreview(sourcePreview)
-  cleanupPreview(orientationPreviewUrl)
+  clearScanArtifacts()
 })
 </script>
 
@@ -263,11 +312,11 @@ onUnmounted(() => {
         <button class="primary-button continue-button" type="button" @click="processScan">Looks right — clean this image <span>→</span></button>
       </section>
 
-      <ScanProgress v-else-if="view === 'processing'" :preview-url="sourcePreview || orientationPreviewUrl" :active-step="pipelineStep" @cancel="cancelScan" />
+      <div v-else-if="view === 'processing'" class="processing-view"><ScanProgress :preview-url="sourcePreview || orientationPreviewUrl" :active-step="pipelineStep" @cancel="cancelScan" /><DebugPanel v-if="debugEnabled" :calibration="calibration" :artifacts="artifacts" :saving="savingCalibration" @save="saveCalibration" @reset="resetCalibration" /></div>
 
       <section v-else class="review-view">
         <div class="review-header"><div><button class="back-button" type="button" @click="view = 'capture'">← New scan</button><span class="eyebrow">SCORECARD EDITOR <span v-if="dirty" class="dirty-mark">· unsaved</span></span><h1>{{ gameTitle }}</h1></div><div class="review-actions"><button class="quiet-button" type="button" @click="exportJson">Export JSON</button><button class="quiet-button" type="button" @click="printScorecard">Print</button><button class="primary-button" type="button" :disabled="isBusy" @click="save">{{ scanStatus === 'saving' ? 'Saving…' : 'Save game' }}</button></div></div>
-        <div class="review-layout"><aside class="source-column"><div class="source-card"><div class="source-card-head"><div><span class="eyebrow">PREPARED PREVIEW</span><h3>Cleaned source image</h3></div></div><div class="source-frame"><img v-if="sourcePreview" :src="sourcePreview" alt="Rotated, cleaned scorecard source" /><div v-else class="no-source"><span>▧</span><p>The original image was not stored<br />for this saved game.</p></div></div><div class="source-caption"><span class="status-dot"></span>Rotated · deskewed · desaturated</div></div><ConfidencePanel :bundle="ocr" @update="updateOCRField" /></aside><div class="editor-column"><ScorecardEditor v-model="scorecard" @change="scorecardChanged" /><div class="mobile-actions"><button class="quiet-button" type="button" @click="printScorecard">Print</button><button class="primary-button" type="button" @click="save">Save game</button></div><div class="archive-strip"><div><span class="eyebrow">HISTORICAL ARTIFACT</span><strong>Finished editing?</strong><p>Send this normalized game record to the archive API when ready.</p></div><button class="archive-button" type="button" :disabled="archiveState === 'sending' || archiveState === 'sent'" @click="archive">{{ archiveState === 'sent' ? '✓ Sent to archive' : archiveState === 'sending' ? 'Sending…' : 'Send game ↗' }}</button></div></div></div>
+        <div class="review-layout"><aside class="source-column"><div class="source-card"><div class="source-card-head"><div><span class="eyebrow">PREPARED PREVIEW</span><h3>Cleaned source image</h3></div></div><div class="source-frame"><img v-if="sourcePreview" :src="sourcePreview" alt="Rotated, cleaned scorecard source" /><div v-else class="no-source"><span>▧</span><p>The original image was not stored<br />for this saved game.</p></div></div><div class="source-caption"><span class="status-dot"></span>Rotated · deskewed · desaturated</div></div><ConfidencePanel :bundle="ocr" @update="updateOCRField" /></aside><div class="editor-column"><ScorecardEditor v-model="scorecard" @change="scorecardChanged" /><div class="mobile-actions"><button class="quiet-button" type="button" @click="printScorecard">Print</button><button class="primary-button" type="button" @click="save">Save game</button></div><div class="archive-strip"><div><span class="eyebrow">HISTORICAL ARTIFACT</span><strong>Finished editing?</strong><p>Send this normalized game record to the archive API when ready.</p></div><button class="archive-button" type="button" :disabled="archiveState === 'sending' || archiveState === 'sent'" @click="archive">{{ archiveState === 'sent' ? '✓ Sent to archive' : archiveState === 'sending' ? 'Sending…' : 'Send game ↗' }}</button></div><DebugPanel v-if="debugEnabled" :calibration="calibration" :artifacts="artifacts" :saving="savingCalibration" @save="saveCalibration" @reset="resetCalibration" /></div></div>
       </section>
     </main>
     <footer class="footer"><span>RINK RECORD / PRIVATE GAME DESK</span><span>OCR IS A FIRST DRAFT · YOU ARE THE OFFICIAL SCORER</span></footer>
