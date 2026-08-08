@@ -3,6 +3,11 @@ main = "src/server/index.ts"
 compatibility_date = "2026-07-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Run the Vue/Vite build automatically before `wrangler deploy`.
+[build]
+command = "npm run build"
+watch_dir = "src"
+
 # Vite writes the fresh Vue client here. API requests fall through to the Worker.
 [assets]
 directory = "./dist/client"
