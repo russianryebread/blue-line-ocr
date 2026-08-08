@@ -1,7 +1,4 @@
--- Historic record of every scorecard a user has extracted + confirmed.
--- `data` holds the full, corrected JSON blob (matching the app's scorecard
--- schema). The other columns are pulled out of that blob purely so the
--- history list can be queried/sorted without parsing JSON every time.
+-- Existing schema retained so remote D1 migration history remains compatible.
 CREATE TABLE IF NOT EXISTS games (
   id                TEXT PRIMARY KEY,
   created_at        TEXT NOT NULL DEFAULT (datetime('now')),
