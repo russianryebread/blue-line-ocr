@@ -26,6 +26,14 @@ For a full Worker preview with the AI and D1 bindings:
 npm run cf:dev
 ```
 
+For Cloudflare Builds, use `npm run build` as the build command and `npx wrangler deploy` as the deploy command. Or use the repository shortcut locally/through CI:
+
+```bash
+npm run deploy
+```
+
+The build must run before Wrangler deploys because the Worker serves the Vue client from `dist/client`.
+
 The existing `wrangler.toml` is the canonical deployment configuration. It preserves the `blue-line-ocr` Worker name, the existing `hockey-scorecards` D1 database, its database ID, the `AI` binding, `LOG_LEVEL`, and `VISION_MODEL`.
 
 Apply the compatible migration to the existing database:
