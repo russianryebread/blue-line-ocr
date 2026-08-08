@@ -1,20 +1,24 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import ConfidencePanel from './components/ConfidencePanel.vue'
+import ScanProgress from './components/ScanProgress.vue'
 import ScorecardEditor from './components/ScorecardEditor.vue'
 import { api } from './services/api'
-import { ocrRegionLabel, prepareScan, type PipelineStep } from './services/imagePipeline'
+import { inspectScan, orientationPreview, prepareScan, type PipelineStep, type ScanInspection } from './services/imagePipeline'
 import type { GameSummary, OCRBundle, OCRField, SavedGame, Scorecard } from '@/shared/scorecard'
 import { blankScorecard } from '@/shared/scorecard'
 
-type View = 'desk' | 'review'
-type ScanStatus = 'idle' | 'preparing' | 'ocr' | 'ready' | 'saving' | 'error'
+type View = 'capture' | 'orientation' | 'processing' | 'review'
+type ScanStatus = 'idle' | 'orientation' | 'preparing' | 'ocr' | 'ready' | 'saving' | 'error'
 
-const view = ref<View>('desk')
+const view = ref<View>('capture')
 const scorecard = ref<Scorecard>(blankScorecard())
 const games = ref<GameSummary[]>([])
 const ocr = ref<OCRBundle | null>(null)
 const sourcePreview = ref<string | null>(null)
+const orientationPreviewUrl = ref<string | null>(null)
+const inspection = ref<ScanInspection | null>(null)
+const rotation = ref(0)
 const fileInput = ref<HTMLInputElement | null>(null)
 const scanStatus = ref<ScanStatus>('idle')
 const pipelineStep = ref<(PipelineStep | 'ocr') | null>(null)
@@ -23,25 +27,8 @@ const notice = ref('')
 const dirty = ref(false)
 const archiveState = ref<'idle' | 'sending' | 'sent'>('idle')
 
+const gameTitle = computed(() => `${scorecard.value.home.name || 'Home team'} vs ${scorecard.value.visitor.name || 'Visitor'}`)
 const isBusy = computed(() => ['preparing', 'ocr', 'saving'].includes(scanStatus.value))
-const gameTitle = computed(() => {
-  const home = scorecard.value.home.name || 'Home team'
-  const visitor = scorecard.value.visitor.name || 'Visitor'
-  return `${home} vs ${visitor}`
-})
-
-const pipelineSteps: Array<{ id: PipelineStep | 'ocr'; label: string }> = [
-  { id: 'orientation', label: 'Orientation' },
-  { id: 'deskew', label: 'Deskew' },
-  { id: 'cleanup', label: 'Cleanup' },
-  { id: 'segment', label: 'Sections' },
-  { id: 'ocr', label: 'OCR' }
-]
-
-function isStepDone(id: PipelineStep | 'ocr') {
-  const current = pipelineSteps.findIndex(step => step.id === (pipelineStep.value || 'orientation'))
-  return pipelineSteps.findIndex(step => step.id === id) < current || scanStatus.value === 'ready'
-}
 
 function chooseFile() {
   fileInput.value?.click()
@@ -51,30 +38,57 @@ async function receiveFile(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
-  if (file) await scanFile(file)
+  if (file) await beginScan(file)
 }
 
 async function receiveDrop(event: DragEvent) {
   const file = event.dataTransfer?.files?.[0]
-  if (file) await scanFile(file)
+  if (file) await beginScan(file)
 }
 
-async function scanFile(file: File) {
+async function beginScan(file: File) {
   if (!file.type.startsWith('image/')) {
-    errorMessage.value = 'Choose a JPG, PNG, or HEIC image of the scorecard.'
+    errorMessage.value = 'Choose a JPG, PNG, or camera photo of the scorecard.'
     scanStatus.value = 'error'
     return
   }
   errorMessage.value = ''
   notice.value = ''
-  scanStatus.value = 'preparing'
-  pipelineStep.value = 'orientation'
-  if (sourcePreview.value) URL.revokeObjectURL(sourcePreview.value)
-
+  cleanupPreview(orientationPreviewUrl)
+  cleanupPreview(sourcePreview)
   try {
-    const prepared = await prepareScan(file, step => {
+    inspection.value = await inspectScan(file)
+    orientationPreviewUrl.value = inspection.value.originalPreviewUrl
+    rotation.value = 0
+    scanStatus.value = 'orientation'
+    view.value = 'orientation'
+  } catch (error) {
+    scanStatus.value = 'error'
+    errorMessage.value = error instanceof Error ? error.message : 'The image could not be opened.'
+  }
+}
+
+async function changeRotation(delta: number) {
+  if (!inspection.value) return
+  const nextAngle = (rotation.value + delta + 360) % 360
+  const nextPreview = await orientationPreview(inspection.value.source, nextAngle)
+  cleanupPreview(orientationPreviewUrl, inspection.value.originalPreviewUrl)
+  rotation.value = nextAngle
+  orientationPreviewUrl.value = nextAngle === 0 ? inspection.value.originalPreviewUrl : nextPreview
+  if (nextAngle === 0) URL.revokeObjectURL(nextPreview)
+}
+
+async function processScan() {
+  if (!inspection.value) return
+  errorMessage.value = ''
+  view.value = 'processing'
+  scanStatus.value = 'preparing'
+  pipelineStep.value = 'deskew'
+  try {
+    const prepared = await prepareScan(inspection.value, rotation.value, step => {
       pipelineStep.value = step
     })
+    cleanupPreview(sourcePreview)
     sourcePreview.value = prepared.previewUrl
     scanStatus.value = 'ocr'
     pipelineStep.value = 'ocr'
@@ -82,12 +96,28 @@ async function scanFile(file: File) {
     scorecard.value = result.scorecard
     ocr.value = result.ocr
     dirty.value = true
-    view.value = 'review'
     scanStatus.value = 'ready'
+    view.value = 'review'
   } catch (error) {
     scanStatus.value = 'error'
     errorMessage.value = error instanceof Error ? error.message : 'The scorecard could not be processed.'
+    view.value = 'capture'
   }
+}
+
+function cancelScan() {
+  cleanupPreview(orientationPreviewUrl)
+  cleanupPreview(sourcePreview)
+  inspection.value = null
+  rotation.value = 0
+  scanStatus.value = 'idle'
+  pipelineStep.value = null
+  view.value = 'capture'
+}
+
+function cleanupPreview(value: { value: string | null }, keep?: string) {
+  if (value.value && value.value !== keep) URL.revokeObjectURL(value.value)
+  value.value = null
 }
 
 async function loadGames() {
@@ -100,27 +130,26 @@ async function loadGames() {
 
 async function openGame(id: string) {
   try {
-    const game = await api.getGame(id)
+    const game: SavedGame = await api.getGame(id)
     scorecard.value = game.scorecard
     ocr.value = game.ocr || null
-    sourcePreview.value = null
+    cleanupPreview(sourcePreview)
+    cleanupPreview(orientationPreviewUrl)
+    inspection.value = null
     dirty.value = false
     archiveState.value = game.status === 'archived' ? 'sent' : 'idle'
     view.value = 'review'
-    notice.value = ''
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'That game could not be opened.'
   }
 }
 
-function newScorecard() {
+function newGame() {
+  cancelScan()
   scorecard.value = blankScorecard()
   ocr.value = null
-  sourcePreview.value = null
   dirty.value = false
   archiveState.value = 'idle'
-  scanStatus.value = 'idle'
-  view.value = 'review'
 }
 
 async function save() {
@@ -191,9 +220,7 @@ function setPath(target: Record<string, unknown>, path: string, value: unknown) 
 
 function updateOCRField(field: OCRField) {
   const numeric = Number(field.value.replace(/[^0-9-]/g, ''))
-  const value: unknown = /\.p[123]|\.ot|\.total$/.test(field.key) && field.value.trim() !== '' && Number.isFinite(numeric)
-    ? numeric
-    : field.value
+  const value: unknown = /\.p[123]|\.ot|\.total$/.test(field.key) && field.value.trim() !== '' && Number.isFinite(numeric) ? numeric : field.value
   setPath(scorecard.value as unknown as Record<string, unknown>, field.key, value)
   dirty.value = true
 }
@@ -205,41 +232,42 @@ function scorecardChanged() {
 
 onMounted(loadGames)
 onUnmounted(() => {
-  if (sourcePreview.value) URL.revokeObjectURL(sourcePreview.value)
+  cleanupPreview(sourcePreview)
+  cleanupPreview(orientationPreviewUrl)
 })
 </script>
 
 <template>
   <div class="app-shell">
     <header class="topbar">
-      <button class="brand" type="button" @click="view = 'desk'"><span class="brand-mark">RR</span><span><strong>Rink Record</strong><small>paper → archive</small></span></button>
-      <div class="topbar-center"><span class="live-dot"></span> Local game desk <span class="slash">/</span> {{ view === 'desk' ? 'Inbox' : 'Scorecard editor' }}</div>
-      <button class="new-button" type="button" @click="newScorecard"><span>＋</span> New game</button>
+      <button class="brand" type="button" @click="view = 'capture'"><span class="brand-mark">RR</span><span><strong>Rink Record</strong><small>paper → archive</small></span></button>
+      <button v-if="view === 'review'" class="new-button" type="button" @click="newGame">New scan</button>
     </header>
 
     <main class="main-content">
       <div v-if="errorMessage" class="toast toast-error"><span>!</span>{{ errorMessage }}<button type="button" @click="errorMessage = ''">×</button></div>
       <div v-if="notice" class="toast toast-success"><span>✓</span>{{ notice }}<button type="button" @click="notice = ''">×</button></div>
 
-      <section v-if="view === 'desk'" class="desk-view">
-        <div class="intro-row"><div><span class="eyebrow">GAME DESK · {{ games.length }} SAVED</span><h1>Make the paper<br /><em>make sense.</em></h1><p>Turn a handwritten hockey scorecard into a clean, editable game record.</p></div><div class="intro-note"><span class="note-line"></span><span>Built for the one person who still has to read the handwriting.</span></div></div>
-        <div class="desk-grid">
-          <button class="dropzone" type="button" @click="chooseFile" @dragover.prevent @drop.prevent="receiveDrop">
-            <input ref="fileInput" class="visually-hidden" type="file" accept="image/*" capture="environment" @change="receiveFile" />
-            <div class="dropzone-art"><span class="corner corner-tl"></span><span class="corner corner-tr"></span><span class="corner corner-bl"></span><span class="corner corner-br"></span><div class="scan-icon"><span></span><span></span><span></span></div></div>
-            <span class="dropzone-label">Scan a scorecard</span><span class="dropzone-sub">Take a photo or choose an image<br />JPG · PNG · camera photo</span><span class="dropzone-action">Open camera / files <b>↗</b></span>
-          </button>
-          <div class="desk-side"><div class="workflow-card"><span class="eyebrow">THE HANDOFF</span><h2>Five quiet steps<br />to a better record.</h2><ol><li><span>01</span><b>Clean the image</b><small>Orientation, skew, grayscale</small></li><li><span>02</span><b>Split the form</b><small>Known sections, less noise</small></li><li><span>03</span><b>Read each section</b><small>AI OCR with confidence</small></li><li><span>04</span><b>Correct the record</b><small>You stay in control</small></li><li><span>05</span><b>Save or send</b><small>D1 + your archive API</small></li></ol></div></div>
-        </div>
-        <section class="recent-section"><div class="section-heading-row"><div><span class="eyebrow">MEMORY</span><h2>Recent games</h2></div><button v-if="games.length" class="text-button" type="button" @click="loadGames">Refresh ↻</button></div><div v-if="games.length" class="recent-grid"><button v-for="game in games" :key="game.id" class="recent-card" type="button" @click="openGame(game.id)"><span class="recent-date">{{ game.game_date || 'Undated' }} · {{ game.game_time || 'time unknown' }}</span><strong>{{ game.home_team || 'Home team' }}</strong><span class="versus">vs</span><strong>{{ game.visitor_team || 'Visitor' }}</strong><span class="recent-meta"><span>{{ game.home_score ?? '—' }} — {{ game.visitor_score ?? '—' }}</span><span :class="`status status-${game.status}`">{{ game.status }}</span></span></button></div><div v-else class="memory-empty"><span class="empty-orbit">◌</span><div><strong>Your game memory is empty.</strong><p>Save a scorecard and it will live here, ready to reopen, print, or send onward.</p></div></div></section>
+      <section v-if="view === 'capture'" class="capture-page">
+        <div class="capture-heading"><span class="eyebrow">RINK RECORD</span><h1>Scan the<br /><em>scorecard.</em></h1><p>Take a clear photo or choose one from your phone. We’ll make it readable and ready to edit.</p></div>
+        <input ref="fileInput" class="visually-hidden" type="file" accept="image/*" capture="environment" @change="receiveFile" />
+        <button class="camera-button" type="button" @click="chooseFile" @dragover.prevent @drop.prevent="receiveDrop"><span class="camera-glyph"><i></i></span><strong>Take a picture</strong><small>or choose a photo from this device</small></button>
+        <button class="upload-button" type="button" @click="chooseFile">Choose an upload <span>↗</span></button>
+        <div class="capture-tip"><span>◎</span><p>Fit all four corners in the frame.<br />A flat, well-lit card reads best.</p></div>
+        <details v-if="games.length" class="recent-drawer"><summary>Open a saved game <span>{{ games.length }}</span></summary><div class="recent-list"><button v-for="game in games" :key="game.id" type="button" @click="openGame(game.id)"><span>{{ game.game_date || 'Undated' }}</span><strong>{{ game.home_team || 'Home' }} <i>vs</i> {{ game.visitor_team || 'Visitor' }}</strong><small>{{ game.home_score ?? '—' }} — {{ game.visitor_score ?? '—' }}</small></button></div></details>
       </section>
 
+      <section v-else-if="view === 'orientation'" class="orientation-page">
+        <div class="orientation-heading"><button class="back-button" type="button" @click="cancelScan">← Start over</button><span class="eyebrow">STEP 1 OF 2 · ORIENTATION CHECK</span><h1>Is the top<br /><em>up?</em></h1><p>Rotate the preview until the scorecard reads naturally. OCR starts only after you confirm.</p></div>
+        <div class="orientation-card"><img v-if="orientationPreviewUrl" :src="orientationPreviewUrl" alt="Scorecard orientation preview" /><div class="rotation-controls"><button type="button" aria-label="Rotate left" @click="changeRotation(-90)">↶</button><span>{{ rotation }}°</span><button type="button" aria-label="Rotate right" @click="changeRotation(90)">↷</button></div></div>
+        <button class="primary-button continue-button" type="button" @click="processScan">Looks right — clean this image <span>→</span></button>
+      </section>
+
+      <ScanProgress v-else-if="view === 'processing'" :preview-url="sourcePreview || orientationPreviewUrl" :active-step="pipelineStep" @cancel="cancelScan" />
+
       <section v-else class="review-view">
-        <div class="review-header"><div><button class="back-button" type="button" @click="view = 'desk'">← Game desk</button><span class="eyebrow">SCORECARD EDITOR <span v-if="dirty" class="dirty-mark">· unsaved</span></span><h1>{{ gameTitle }}</h1></div><div class="review-actions"><button class="quiet-button" type="button" @click="exportJson">Export JSON</button><button class="quiet-button" type="button" @click="printScorecard">Print</button><button class="primary-button" type="button" :disabled="isBusy" @click="save">{{ scanStatus === 'saving' ? 'Saving…' : 'Save game' }}</button></div></div>
-        <div class="review-layout">
-          <aside class="source-column"><div class="source-card"><div class="source-card-head"><div><span class="eyebrow">SOURCE IMAGE</span><h3>What the camera saw</h3></div><span v-if="ocr" class="source-confidence">{{ ocrRegionLabel(ocr) }}% readable</span></div><div class="source-frame"><img v-if="sourcePreview" :src="sourcePreview" alt="Normalized scorecard source" /><div v-else class="no-source"><span>▧</span><p>This game was opened from memory.<br />The original image was not stored.</p></div></div><div class="source-caption"><span class="status-dot"></span>{{ ocr ? 'Normalized + sectioned in browser' : 'Manual record' }}</div></div><ConfidencePanel :bundle="ocr" @update="updateOCRField" /></aside>
-          <div class="editor-column"><div v-if="scanStatus === 'preparing' || scanStatus === 'ocr'" class="processing-banner"><span class="spinner"></span><div><strong>{{ scanStatus === 'ocr' ? 'Reading each scorecard section…' : 'Preparing your scorecard…' }}</strong><small>{{ pipelineStep ? pipelineSteps.find(step => step.id === pipelineStep)?.label : 'Starting' }} in progress</small></div><div class="mini-progress"><i v-for="step in pipelineSteps" :key="step.id" :class="{ active: pipelineStep === step.id, done: isStepDone(step.id) }"></i></div></div><ScorecardEditor v-model="scorecard" @change="scorecardChanged" /><div class="mobile-actions"><button class="quiet-button" type="button" @click="printScorecard">Print</button><button class="primary-button" type="button" @click="save">Save game</button></div><div class="archive-strip"><div><span class="eyebrow">HISTORICAL ARTIFACT</span><strong>Finished editing?</strong><p>Send this normalized game record to the archive API when you are ready.</p></div><button class="archive-button" type="button" :disabled="archiveState === 'sending' || archiveState === 'sent'" @click="archive">{{ archiveState === 'sent' ? '✓ Sent to archive' : archiveState === 'sending' ? 'Sending…' : 'Send game ↗' }}</button></div></div>
-        </div>
+        <div class="review-header"><div><button class="back-button" type="button" @click="view = 'capture'">← New scan</button><span class="eyebrow">SCORECARD EDITOR <span v-if="dirty" class="dirty-mark">· unsaved</span></span><h1>{{ gameTitle }}</h1></div><div class="review-actions"><button class="quiet-button" type="button" @click="exportJson">Export JSON</button><button class="quiet-button" type="button" @click="printScorecard">Print</button><button class="primary-button" type="button" :disabled="isBusy" @click="save">{{ scanStatus === 'saving' ? 'Saving…' : 'Save game' }}</button></div></div>
+        <div class="review-layout"><aside class="source-column"><div class="source-card"><div class="source-card-head"><div><span class="eyebrow">PREPARED PREVIEW</span><h3>Cleaned source image</h3></div></div><div class="source-frame"><img v-if="sourcePreview" :src="sourcePreview" alt="Rotated, cleaned scorecard source" /><div v-else class="no-source"><span>▧</span><p>The original image was not stored<br />for this saved game.</p></div></div><div class="source-caption"><span class="status-dot"></span>Rotated · deskewed · desaturated</div></div><ConfidencePanel :bundle="ocr" @update="updateOCRField" /></aside><div class="editor-column"><ScorecardEditor v-model="scorecard" @change="scorecardChanged" /><div class="mobile-actions"><button class="quiet-button" type="button" @click="printScorecard">Print</button><button class="primary-button" type="button" @click="save">Save game</button></div><div class="archive-strip"><div><span class="eyebrow">HISTORICAL ARTIFACT</span><strong>Finished editing?</strong><p>Send this normalized game record to the archive API when ready.</p></div><button class="archive-button" type="button" :disabled="archiveState === 'sending' || archiveState === 'sent'" @click="archive">{{ archiveState === 'sent' ? '✓ Sent to archive' : archiveState === 'sending' ? 'Sending…' : 'Send game ↗' }}</button></div></div></div>
       </section>
     </main>
     <footer class="footer"><span>RINK RECORD / PRIVATE GAME DESK</span><span>OCR IS A FIRST DRAFT · YOU ARE THE OFFICIAL SCORER</span></footer>

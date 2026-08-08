@@ -54,6 +54,12 @@ export interface PreparedScan {
   normalized: NormalizedImage
 }
 
+export interface ScanInspection {
+  source: HTMLCanvasElement
+  originalPreviewUrl: string
+  orientation: 'portrait' | 'landscape'
+}
+
 function loadImage(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
@@ -90,6 +96,8 @@ function rotateCanvas(source: HTMLCanvasElement, angle: number): HTMLCanvasEleme
   canvas.height = Math.ceil(source.width * sin + source.height * cos)
   const context = canvas.getContext('2d')
   if (!context) throw new Error('Canvas processing is not supported in this browser.')
+  context.fillStyle = '#fff'
+  context.fillRect(0, 0, canvas.width, canvas.height)
   context.translate(canvas.width / 2, canvas.height / 2)
   context.rotate(radians)
   context.drawImage(source, -source.width / 2, -source.height / 2)
@@ -168,21 +176,38 @@ function cropRegion(source: HTMLCanvasElement, region: RegionDefinition): Promis
   })
 }
 
+async function canvasPreviewUrl(canvas: HTMLCanvasElement): Promise<string> {
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(blobValue => blobValue ? resolve(blobValue) : reject(new Error('Could not create the image preview.')), 'image/jpeg', 0.86)
+  })
+  return URL.createObjectURL(blob)
+}
+
+export async function inspectScan(file: File): Promise<ScanInspection> {
+  const image = await loadImage(file)
+  const source = drawSource(image)
+  return {
+    source,
+    originalPreviewUrl: await canvasPreviewUrl(source),
+    orientation: source.height >= source.width ? 'portrait' : 'landscape'
+  }
+}
+
+export async function orientationPreview(source: HTMLCanvasElement, angle: number): Promise<string> {
+  return canvasPreviewUrl(rotateCanvas(source, angle))
+}
+
 export async function prepareScan(
-  file: File,
+  inspection: ScanInspection,
+  rotationAngle: number,
   onStep: (step: PipelineStep) => void
 ): Promise<PreparedScan> {
-  const image = await loadImage(file)
-  onStep('orientation')
-  const source = drawSource(image)
-  const orientation = source.height >= source.width ? 'portrait' : 'landscape'
-  let normalizedCanvas = source
-
-  if (orientation === 'landscape') normalizedCanvas = rotateCanvas(source, 90)
+  const source = inspection.source
+  let normalizedCanvas = rotationAngle ? rotateCanvas(source, rotationAngle) : source
 
   onStep('deskew')
-  const angle = estimateSkew(normalizedCanvas)
-  if (angle) normalizedCanvas = rotateCanvas(normalizedCanvas, angle)
+  const skewAngle = estimateSkew(normalizedCanvas)
+  if (skewAngle) normalizedCanvas = rotateCanvas(normalizedCanvas, skewAngle)
 
   onStep('cleanup')
   normalizedCanvas = cleanCanvas(normalizedCanvas)
@@ -192,14 +217,10 @@ export async function prepareScan(
     Object.entries(SCORECARD_REGIONS).map(async ([key, region]) => [key, await cropRegion(normalizedCanvas, region)] as const)
   )
 
-  const previewBlob = await new Promise<Blob>((resolve, reject) => {
-    normalizedCanvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not create the normalized preview.')), 'image/jpeg', 0.86)
-  })
-
   return {
-    previewUrl: URL.createObjectURL(previewBlob),
+    previewUrl: await canvasPreviewUrl(normalizedCanvas),
     regions: Object.fromEntries(entries),
-    normalized: { canvas: normalizedCanvas, orientation, angle }
+    normalized: { canvas: normalizedCanvas, orientation: inspection.orientation, angle: rotationAngle + skewAngle }
   }
 }
 
