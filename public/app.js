@@ -138,13 +138,17 @@ function escapeAttr(v) {
 function renderReview() {
   const c = state._confidence || {};
   const html = `
-    ${renderMetaSection(c.meta)}
-    ${renderScoreSection(c.score)}
-    ${renderTeamSection("homeTeam", "Home Team", c.homeTeam)}
-    ${renderTeamSection("visitingTeam", "Visiting Team", c.visitingTeam)}
-    <div class="section">
-      <div class="section-title"><h3>Game Notes</h3></div>
-      <textarea data-path="gameNotes">${escapeHtml(state.gameNotes || "")}</textarea>
+    <div class="scoresheet-paper">
+      ${renderMetaSection(c.meta)}
+      ${renderScoreSection(c.score)}
+      <div class="scoresheet-grid">
+        ${renderTeamSection("homeTeam", "Home Team (Black)", c.homeTeam)}
+        ${renderTeamSection("visitingTeam", "Visiting Team (Lite Beer)", c.visitingTeam)}
+      </div>
+      <div class="section">
+        <div class="section-title"><h3>Game Notes</h3></div>
+        <textarea data-path="gameNotes" rows="3">${escapeHtml(state.gameNotes || "")}</textarea>
+      </div>
     </div>
   `;
   $("#review-body").innerHTML = html;
@@ -155,84 +159,187 @@ function renderReview() {
 function renderMetaSection(conf) {
   return `
     <div class="section conf-${conf}">
-      <div class="section-title"><h3>Game Info</h3>${confBadge(conf)}</div>
+      <div class="section-title"><h3>Official Scoresheet Info</h3>${confBadge(conf)}</div>
       <div class="field-grid">
         ${field("League", "meta.league")}
         ${field("Division", "meta.division")}
         ${field("Date", "meta.date")}
         ${field("Game Time", "meta.gameTime")}
         ${field("Scorekeeper", "meta.scorekeeper")}
-        ${field("Referees (comma-separated)", "meta.referees_csv")}
+        ${field("Referees", "meta.referees_csv")}
       </div>
     </div>`;
 }
 
 function renderScoreSection(conf) {
-  const periodFields = (team) => `
-      <div class="field-grid">
-        ${field("P1", `score.${team}.period1`, { type: "number" })}
-        ${field("P2", `score.${team}.period2`, { type: "number" })}
-        ${field("P3", `score.${team}.period3`, { type: "number" })}
-        ${field("OT", `score.${team}.ot`, { type: "number" })}
-        ${field("Total", `score.${team}.total`, { type: "number" })}
-      </div>`;
   return `
     <div class="section conf-${conf}">
-      <div class="section-title"><h3>Score</h3>${confBadge(conf)}</div>
-      <div class="subhead">Home (${escapeHtml(state.homeTeam?.name || "")})</div>
-      ${periodFields("home")}
-      <div class="subhead">Visiting (${escapeHtml(state.visitingTeam?.name || "")})</div>
-      ${periodFields("visiting")}
+      <div class="section-title"><h3>Final Score Summary</h3>${confBadge(conf)}</div>
+      <div class="table-scroll-container">
+        <table class="sheet-table">
+          <thead>
+            <tr>
+              <th class="col-lg">Team</th>
+              <th class="col-sm">1</th>
+              <th class="col-sm">2</th>
+              <th class="col-sm">3</th>
+              <th class="col-sm">OT</th>
+              <th class="col-sm">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Home (${escapeHtml(state.homeTeam?.name || "Home")})</strong></td>
+              <td><input type="number" data-path="score.home.period1" value="${state.score?.home?.period1 ?? 0}"></td>
+              <td><input type="number" data-path="score.home.period2" value="${state.score?.home?.period2 ?? 0}"></td>
+              <td><input type="number" data-path="score.home.period3" value="${state.score?.home?.period3 ?? 0}"></td>
+              <td><input type="number" data-path="score.home.ot" value="${state.score?.home?.ot ?? 0}"></td>
+              <td><input type="number" data-path="score.home.total" value="${state.score?.home?.total ?? 0}"></td>
+            </tr>
+            <tr>
+              <td><strong>Visitor (${escapeHtml(state.visitingTeam?.name || "Visitor")})</strong></td>
+              <td><input type="number" data-path="score.visiting.period1" value="${state.score?.visiting?.period1 ?? 0}"></td>
+              <td><input type="number" data-path="score.visiting.period2" value="${state.score?.visiting?.period2 ?? 0}"></td>
+              <td><input type="number" data-path="score.visiting.period3" value="${state.score?.visiting?.period3 ?? 0}"></td>
+              <td><input type="number" data-path="score.visiting.ot" value="${state.score?.visiting?.ot ?? 0}"></td>
+              <td><input type="number" data-path="score.visiting.total" value="${state.score?.visiting?.total ?? 0}"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>`;
 }
 
 function renderTeamSection(teamKey, label, conf) {
-  const team = state[teamKey];
+  const team = state[teamKey] || {};
   return `
     <div class="section conf-${conf}">
       <div class="section-title"><h3>${label}</h3>${confBadge(conf)}</div>
-      ${field("Team Name", `${teamKey}.name`)}
-
-      <div class="subhead">Players</div>
-      <div class="row-list" data-list="${teamKey}.players">
-        ${team.players.map((p, i) => playerRow(teamKey, i)).join("")}
+      <div style="margin-bottom: 8px;">
+        ${field("Team Name", `${teamKey}.name`)}
       </div>
-      <button class="add-row-btn" data-add="${teamKey}.players" data-template="player">+ Add player</button>
 
-      <div class="subhead">Goals</div>
-      <div class="row-list" data-list="${teamKey}.goals">
-        ${team.goals.map((g, i) => goalRow(teamKey, i)).join("")}
+      <!-- Roster Section -->
+      <div class="subhead">Roster</div>
+      <div class="table-scroll-container">
+        <table class="sheet-table">
+          <thead>
+            <tr>
+              <th class="col-sm">NO</th>
+              <th class="col-lg">PLAYER</th>
+              <th class="col-xs"></th>
+            </tr>
+          </thead>
+          <tbody data-list="${teamKey}.players">
+            ${(team.players || []).map((p, i) => `
+              <tr>
+                <td><input type="number" data-path="${teamKey}.players[${i}].number" value="${p.number ?? ''}"></td>
+                <td><input type="text" data-path="${teamKey}.players[${i}].name" value="${escapeAttr(p.name || '')}"></td>
+                <td><button class="remove-row-btn" data-remove="${teamKey}.players" data-index="${i}">✕</button></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
       </div>
-      <button class="add-row-btn" data-add="${teamKey}.goals" data-template="goal">+ Add goal</button>
+      <button class="add-row-btn" data-add="${teamKey}.players" data-template="player">+ Add Player</button>
 
+      <!-- Goals Section -->
+      <div class="subhead">Scoring / Goals</div>
+      <div class="table-scroll-container">
+        <table class="sheet-table">
+          <thead>
+            <tr>
+              <th class="col-sm">PER</th>
+              <th class="col-sm">TIME</th>
+              <th class="col-sm">GOAL</th>
+              <th class="col-sm">A1</th>
+              <th class="col-sm">A2</th>
+              <th class="col-sm"></th>
+            </tr>
+          </thead>
+          <tbody data-list="${teamKey}.goals">
+            ${(team.goals || []).map((g, i) => `
+              <tr>
+                <td><input type="number" data-path="${teamKey}.goals[${i}].period" value="${g.period ?? ''}"></td>
+                <td><input type="text" data-path="${teamKey}.goals[${i}].time" value="${escapeAttr(g.time || '')}"></td>
+                <td><input type="number" data-path="${teamKey}.goals[${i}].scorerNumber" value="${g.scorerNumber ?? ''}"></td>
+                <td><input type="number" data-path="${teamKey}.goals[${i}].assist1Number" value="${g.assist1Number ?? ''}"></td>
+                <td><input type="number" data-path="${teamKey}.goals[${i}].assist2Number" value="${g.assist2Number ?? ''}"></td>
+                <td><button class="remove-row-btn" data-remove="${teamKey}.goals" data-index="${i}">✕</button></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+      <button class="add-row-btn" data-add="${teamKey}.goals" data-template="goal">+ Add Goal</button>
+
+      <!-- Penalties Section -->
       <div class="subhead">Penalties</div>
-      <div class="row-list" data-list="${teamKey}.penalties">
-        ${team.penalties.map((p, i) => penaltyRow(teamKey, i)).join("")}
+      <div class="table-scroll-container">
+        <table class="sheet-table">
+          <thead>
+            <tr>
+              <th class="col-sm">PER</th>
+              <th class="col-sm">NO</th>
+              <th class="col-sm">MIN</th>
+              <th class="col-lg">OFFENSE</th>
+              <th class="col-sm">START</th>
+              <th class="col-xs"></th>
+            </tr>
+          </thead>
+          <tbody data-list="${teamKey}.penalties">
+            ${(team.penalties || []).map((p, i) => `
+              <tr>
+                <td><input type="number" data-path="${teamKey}.penalties[${i}].period" value="${p.period ?? ''}"></td>
+                <td><input type="number" data-path="${teamKey}.penalties[${i}].playerNumber" value="${p.playerNumber ?? ''}"></td>
+                <td><input type="number" data-path="${teamKey}.penalties[${i}].minutes" value="${p.minutes ?? ''}"></td>
+                <td><input type="text" data-path="${teamKey}.penalties[${i}].offense" value="${escapeAttr(p.offense || '')}"></td>
+                <td><input type="text" data-path="${teamKey}.penalties[${i}].startTime" value="${escapeAttr(p.startTime || '')}"></td>
+                <td><button class="remove-row-btn" data-remove="${teamKey}.penalties" data-index="${i}">✕</button></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
       </div>
-      <button class="add-row-btn" data-add="${teamKey}.penalties" data-template="penalty">+ Add penalty</button>
+      <button class="add-row-btn" data-add="${teamKey}.penalties" data-template="penalty">+ Add Penalty</button>
 
-      <div class="subhead">Goalkeeper</div>
-      <div class="field-grid wide">${field("Name", `${teamKey}.goalkeeper.name`)}</div>
-      <div class="field-grid">
-        ${field("SA P1", `${teamKey}.goalkeeper.shotsAgainstByPeriod.p1`, { type: "number" })}
-        ${field("SA P2", `${teamKey}.goalkeeper.shotsAgainstByPeriod.p2`, { type: "number" })}
-        ${field("SA P3", `${teamKey}.goalkeeper.shotsAgainstByPeriod.p3`, { type: "number" })}
-        ${field("SA OT", `${teamKey}.goalkeeper.shotsAgainstByPeriod.ot`, { type: "number" })}
-        ${field("SA Total", `${teamKey}.goalkeeper.shotsAgainstByPeriod.total`, { type: "number" })}
-        ${field("Saves P1", `${teamKey}.goalkeeper.savesByPeriod.p1`, { type: "number" })}
-        ${field("Saves P2", `${teamKey}.goalkeeper.savesByPeriod.p2`, { type: "number" })}
-        ${field("Saves P3", `${teamKey}.goalkeeper.savesByPeriod.p3`, { type: "number" })}
-        ${field("Saves OT", `${teamKey}.goalkeeper.savesByPeriod.ot`, { type: "number" })}
-        ${field("Saves Total", `${teamKey}.goalkeeper.savesByPeriod.total`, { type: "number" })}
+      <!-- Goalie Stats -->
+      <div class="subhead">Goalkeeper Stats</div>
+      <div style="margin-bottom: 6px;">
+        ${field("Goalie Name", `${teamKey}.goalkeeper.name`)}
       </div>
-
-      <div class="field-grid wide">${field("Timeouts", `${teamKey}.timeouts`, { type: "number" })}</div>
-
-      <div class="subhead">Shootout</div>
-      <div class="row-list" data-list="${teamKey}.shootout">
-        ${team.shootout.map((s, i) => shootoutRow(teamKey, i)).join("")}
+      <div class="table-scroll-container">
+        <table class="sheet-table">
+          <thead>
+            <tr>
+              <th>STAT</th>
+              <th class="col-sm">1</th>
+              <th class="col-sm">2</th>
+              <th class="col-sm">3</th>
+              <th class="col-sm">OT</th>
+              <th class="col-sm">TOT</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Shots</strong></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.shotsAgainstByPeriod.p1" value="${team.goalkeeper?.shotsAgainstByPeriod?.p1 ?? ''}"></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.shotsAgainstByPeriod.p2" value="${team.goalkeeper?.shotsAgainstByPeriod?.p2 ?? ''}"></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.shotsAgainstByPeriod.p3" value="${team.goalkeeper?.shotsAgainstByPeriod?.p3 ?? ''}"></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.shotsAgainstByPeriod.ot" value="${team.goalkeeper?.shotsAgainstByPeriod?.ot ?? ''}"></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.shotsAgainstByPeriod.total" value="${team.goalkeeper?.shotsAgainstByPeriod?.total ?? ''}"></td>
+            </tr>
+            <tr>
+              <td><strong>Saves</strong></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.savesByPeriod.p1" value="${team.goalkeeper?.savesByPeriod?.p1 ?? ''}"></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.savesByPeriod.p2" value="${team.goalkeeper?.savesByPeriod?.p2 ?? ''}"></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.savesByPeriod.p3" value="${team.goalkeeper?.savesByPeriod?.p3 ?? ''}"></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.savesByPeriod.ot" value="${team.goalkeeper?.savesByPeriod?.ot ?? ''}"></td>
+              <td><input type="number" data-path="${teamKey}.goalkeeper.savesByPeriod.total" value="${team.goalkeeper?.savesByPeriod?.total ?? ''}"></td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-      <button class="add-row-btn" data-add="${teamKey}.shootout" data-template="shootout">+ Add attempt</button>
     </div>`;
 }
 

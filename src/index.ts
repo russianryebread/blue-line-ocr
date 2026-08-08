@@ -70,7 +70,7 @@ app.post("/api/extract", async (c) => {
         },
       },
       reasoning_effort: "none",
-      max_tokens: 1500,
+      max_tokens: 2500,
     });
   } catch (err: any) {
     console.error("AI Model API call failed", err);
